@@ -5,6 +5,7 @@ import { exchangeCode, saveToken } from '../data/stravaApi'
 export default function StravaCallback() {
   const navigate = useNavigate()
   const [status, setStatus] = useState('Подключаем Strava...')
+  const [errMsg, setErrMsg] = useState('')
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -24,13 +25,18 @@ export default function StravaCallback() {
 
     exchangeCode(code)
       .then(data => {
+        if (data.errors || data.error) {
+          setStatus('Ошибка Strava')
+          setErrMsg(JSON.stringify(data))
+          return
+        }
         saveToken(data)
         setStatus('✓ Strava подключена!')
         setTimeout(() => navigate('/strava'), 1200)
       })
-      .catch(() => {
+      .catch(e => {
         setStatus('Ошибка подключения')
-        setTimeout(() => navigate('/strava'), 2000)
+        setErrMsg(e.message)
       })
   }, [])
 
@@ -39,7 +45,9 @@ export default function StravaCallback() {
       <div className="callback-card">
         <span className="callback-icon">🔗</span>
         <p className="callback-status">{status}</p>
-        <div className="callback-spinner" />
+        {errMsg && <p style={{color:'red',fontSize:'12px',wordBreak:'break-all',padding:'10px'}}>{errMsg}</p>}
+        {!errMsg && <div className="callback-spinner" />}
+        {errMsg && <button onClick={() => navigate('/strava')} style={{marginTop:'12px',padding:'8px 16px'}}>← Назад</button>}
       </div>
     </div>
   )
