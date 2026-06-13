@@ -1,7 +1,7 @@
 const API_BASE = 'https://examguard-backend-production-7fc7.up.railway.app'
 
 const CLIENT_ID   = '257159'
-const REDIRECT_URI = `${window.location.origin}/strava/callback`
+const REDIRECT_URI = "https://bike-toolbox.vercel.app/strava/callback"
 
 export function getStravaAuthUrl() {
   const params = new URLSearchParams({
