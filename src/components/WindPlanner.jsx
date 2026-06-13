@@ -1,15 +1,35 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, Suspense, lazy } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 const WindMap = lazy(() => import('./WindMap'))
-const { getRoute, geocode } = await import('./WindMap').then(m => ({ getRoute: m.getRoute, geocode: m.geocode }))
 
 const WIND_DIRS = ['С','СВ','В','ЮВ','Ю','ЮЗ','З','СЗ']
 const degToDir  = deg => WIND_DIRS[Math.round(deg / 45) % 8]
 const degToRad  = deg => (deg * Math.PI) / 180
 const mpsToKmh  = mps => Math.round(mps * 3.6)
+const OWM_KEY   = '910f0c8c29fee56d79ef2cd869ac8cf2'
 
-const OWM_KEY = '910f0c8c29fee56d79ef2cd869ac8cf2'
+async function geocode(query) {
+  const ORS_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjY2Y2I2Y2NiOTYyZjQyNWJhYjJjNzM2ZjllODczMjdlIiwiaCI6Im11cm11cjY0In0='
+  const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_KEY}&text=${encodeURIComponent(query)}&size=1`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Geocode error')
+  const data = await res.json()
+  if (!data.features?.length) throw new Error('Место не найдено')
+  const [lon, lat] = data.features[0].geometry.coordinates
+  return { lat, lon, label: data.features[0].properties.label }
+}
+
+async function getRoute(fromLat, fromLon, toLat, toLon) {
+  const ORS_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjY2Y2I2Y2NiOTYyZjQyNWJhYjJjNzM2ZjllODczMjdlIiwiaCI6Im11cm11cjY0In0='
+  const res = await fetch('https://api.openrouteservice.org/v2/directions/cycling-regular/geojson', {
+    method: 'POST',
+    headers: { 'Authorization': ORS_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ coordinates: [[fromLon, fromLat], [toLon, toLat]] }),
+  })
+  if (!res.ok) throw new Error('Route error')
+  return res.json()
+}
 
 function getRideScore(windDeg, rideDeg) {
   let diff = ((rideDeg - windDeg) + 360) % 360
@@ -41,7 +61,7 @@ const MOCK_WEATHER = {
 }
 
 function WindCompass({ windDeg, windSpeed }) {
-  const size = 160; const cx = size/2; const cy = size/2; const r = 62
+  const size = 160, cx = size/2, cy = size/2, r = 62
   const arrowDeg = (windDeg + 180) % 360
   const rad = degToRad(arrowDeg - 90)
   const arrowX = cx + Math.cos(rad) * (r - 14)
@@ -57,7 +77,7 @@ function WindCompass({ windDeg, windSpeed }) {
         return <text key={d} x={cx+Math.cos(a)*(r+12)} y={cy+Math.sin(a)*(r+12)+4} textAnchor="middle" fontSize="10" fill="#6b6b85" fontFamily="DM Sans">{l}</text>
       })}
       {Array.from({length:36},(_,i) => {
-        const a = degToRad(i*10-90); const inner = i%9===0 ? r-18 : r-12
+        const a = degToRad(i*10-90), inner = i%9===0 ? r-18 : r-12
         return <line key={i} x1={cx+Math.cos(a)*inner} y1={cy+Math.sin(a)*inner} x2={cx+Math.cos(a)*(r-7)} y2={cy+Math.sin(a)*(r-7)} stroke={i%9===0?'#4a4a6a':'#2a2a38'} strokeWidth={i%9===0?2:1}/>
       })}
       <defs><marker id="ah" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#ff5c35"/></marker></defs>
@@ -97,15 +117,13 @@ export default function WindPlanner() {
   const [city, setCity]           = useState('Semey')
   const [demoMode, setDemoMode]   = useState(false)
   const [mapCenter, setMapCenter] = useState(null)
-
-  // Маршрут
   const [fromPlace, setFromPlace] = useState('')
   const [toPlace, setToPlace]     = useState('')
   const [route, setRoute]         = useState(null)
   const [routeLoading, setRouteLoading] = useState(false)
   const [routeError, setRouteError]     = useState('')
   const [routeInfo, setRouteInfo]       = useState(null)
-  const [activeTab, setActiveTab] = useState('wind') // 'wind' | 'route'
+  const [activeTab, setActiveTab] = useState('wind')
 
   const fetchWeather = useCallback(async (targetCity) => {
     setLoading(true); setError('')
@@ -116,18 +134,13 @@ export default function WindPlanner() {
       setWeather(data)
       setMapCenter([data.coord.lat, data.coord.lon])
       setDemoMode(false)
-    } catch(e) {
-      setError(e.message)
-    } finally { setLoading(false) }
+    } catch(e) { setError(e.message) }
+    finally { setLoading(false) }
   }, [])
 
-  const loadDemo = () => {
-    setWeather(MOCK_WEATHER)
-    setMapCenter([MOCK_WEATHER.coord.lat, MOCK_WEATHER.coord.lon])
-    setDemoMode(true); setError('')
-  }
+  const loadDemo = () => { setWeather(MOCK_WEATHER); setMapCenter([50.4111, 80.2275]); setDemoMode(true); setError('') }
 
-  useEffect(() => { fetchWeather(city) }, [])
+  useEffect(() => { fetchWeather('Semey') }, [])
 
   const buildRoute = async () => {
     if (!fromPlace || !toPlace) { setRouteError('Введи откуда и куда'); return }
@@ -137,15 +150,9 @@ export default function WindPlanner() {
       const routeData = await getRoute(from.lat, from.lon, to.lat, to.lon)
       setRoute(routeData)
       const seg = routeData.features[0].properties.segments[0]
-      setRouteInfo({
-        distance: (seg.distance / 1000).toFixed(1),
-        duration: Math.round(seg.duration / 60),
-        from: from.label,
-        to: to.label,
-      })
-    } catch(e) {
-      setRouteError(e.message || 'Ошибка построения маршрута')
-    } finally { setRouteLoading(false) }
+      setRouteInfo({ distance: (seg.distance/1000).toFixed(1), duration: Math.round(seg.duration/60), from: from.label, to: to.label })
+    } catch(e) { setRouteError(e.message || 'Ошибка') }
+    finally { setRouteLoading(false) }
   }
 
   const windDeg   = weather?.wind?.deg   ?? 0
@@ -154,39 +161,30 @@ export default function WindPlanner() {
   return (
     <div className="wind-screen">
       <button className="btn-back-nav" onClick={() => navigate('/')}>← На главную</button>
-
       <div className="wind-header">
         <span className="wind-header-icon">🌬️</span>
         <h1 className="wind-title">ВЕТЕР</h1>
         <p className="wind-sub">Планируй маршрут с попутным ветром</p>
       </div>
-
-      {/* City search */}
       <div className="wind-search">
         <div className="ws-row">
           <input className="input-field" placeholder="Город..." value={city}
             onChange={e => setCity(e.target.value)}
             onKeyDown={e => e.key==='Enter' && fetchWeather(city)} />
-          <button className="btn-primary ws-btn" onClick={() => fetchWeather(city)}>
-            {loading ? '…' : '🔍'}
-          </button>
+          <button className="btn-primary ws-btn" onClick={() => fetchWeather(city)}>{loading ? '…' : '🔍'}</button>
         </div>
         <div className="ws-actions">
           <button className="ws-link" onClick={loadDemo}>📊 Демо</button>
         </div>
       </div>
-
       {error && <div className="wind-error">⚠️ {error}</div>}
       {demoMode && <div className="wind-demo-badge">DEMO — введи реальный город</div>}
-
       {weather && (
         <>
-          {/* Tabs */}
           <div className="tabs-row" style={{marginBottom:12}}>
             <button className={`tab ${activeTab==='wind'?'active':''}`} onClick={() => setActiveTab('wind')}>🌬️ Ветер</button>
             <button className={`tab ${activeTab==='route'?'active':''}`} onClick={() => setActiveTab('route')}>🗺️ Маршрут</button>
           </div>
-
           {activeTab === 'wind' && (
             <>
               <div className="weather-card">
@@ -198,71 +196,44 @@ export default function WindPlanner() {
                     <span>💧 {weather.main.humidity}%</span>
                   </div>
                 </div>
-                <div className="wc-right">
-                  <WindCompass windDeg={windDeg} windSpeed={windSpeed} />
-                </div>
+                <div className="wc-right"><WindCompass windDeg={windDeg} windSpeed={windSpeed} /></div>
               </div>
-
               <div className="wind-info-row">
                 <div className="wi-card"><span className="wi-val">{mpsToKmh(windSpeed)}</span><span className="wi-unit">км/ч</span><span className="wi-label">Скорость</span></div>
                 <div className="wi-card"><span className="wi-val">{degToDir(windDeg)}</span><span className="wi-label">Откуда</span></div>
                 <div className="wi-card"><span className="wi-val">{windDeg}°</span><span className="wi-label">Градус</span></div>
                 {weather.wind?.gust && <div className="wi-card"><span className="wi-val">{mpsToKmh(weather.wind.gust)}</span><span className="wi-unit">км/ч</span><span className="wi-label">Порывы</span></div>}
               </div>
-
               <div className="wind-section-title">Куда ехать сегодня?</div>
               <DirectionGrid windDeg={windDeg} />
-
               <div className={`wind-tip ${windSpeed>10?'warn':windSpeed>6?'ok':'good'}`}>
                 {windSpeed<=3 && <><span>😎</span><p>Штиль — идеально. Любое направление.</p></>}
-                {windSpeed>3&&windSpeed<=6 && <><span>🟢</span><p>Лёгкий ветер — комфортно. Выбери попутное.</p></>}
-                {windSpeed>6&&windSpeed<=10 && <><span>🟡</span><p>Умеренный ветер — езди по ветру. Против — скорость упадёт на 20–30%.</p></>}
+                {windSpeed>3&&windSpeed<=6 && <><span>🟢</span><p>Лёгкий ветер — комфортно.</p></>}
+                {windSpeed>6&&windSpeed<=10 && <><span>🟡</span><p>Умеренный ветер — езди по ветру.</p></>}
                 {windSpeed>10&&windSpeed<=15 && <><span>🟠</span><p>Сильный ветер — планируй финиш с попутным.</p></>}
                 {windSpeed>15 && <><span>🔴</span><p>Очень сильный ветер. Лучше тренажёр.</p></>}
               </div>
             </>
           )}
-
           {activeTab === 'route' && (
             <>
-              {/* Карта */}
               <div className="wind-map-wrap">
                 <Suspense fallback={<div className="map-loading">Загружаем карту…</div>}>
-                  <WindMap
-                    center={mapCenter}
-                    windDeg={windDeg}
-                    windSpeed={windSpeed}
-                    route={route}
-                  />
+                  <WindMap center={mapCenter} windDeg={windDeg} windSpeed={windSpeed} route={route} />
                 </Suspense>
               </div>
-
-              {/* Построение маршрута */}
               <div className="route-builder">
                 <p className="route-builder-title">🚴 Построить велосипедный маршрут</p>
-                <input className="input-field" placeholder="Откуда (адрес или место)"
-                  value={fromPlace} onChange={e => setFromPlace(e.target.value)}
-                  onKeyDown={e => e.key==='Enter' && buildRoute()} />
-                <input className="input-field" placeholder="Куда (адрес или место)"
-                  value={toPlace} onChange={e => setToPlace(e.target.value)}
-                  onKeyDown={e => e.key==='Enter' && buildRoute()} />
-                <button className="btn-primary" onClick={buildRoute} disabled={routeLoading}>
-                  {routeLoading ? 'Строим…' : '→ Построить маршрут'}
-                </button>
+                <input className="input-field" placeholder="Откуда..." value={fromPlace} onChange={e => setFromPlace(e.target.value)} />
+                <input className="input-field" placeholder="Куда..." value={toPlace} onChange={e => setToPlace(e.target.value)} />
+                <button className="btn-primary" onClick={buildRoute} disabled={routeLoading}>{routeLoading ? 'Строим…' : '→ Построить маршрут'}</button>
                 {routeError && <div className="wind-error">⚠️ {routeError}</div>}
               </div>
-
               {routeInfo && (
                 <div className="route-info-card">
                   <div className="ric-row">
                     <div className="ric-item"><span className="ric-val">{routeInfo.distance}</span><span className="ric-unit">км</span><span className="ric-label">Расстояние</span></div>
                     <div className="ric-item"><span className="ric-val">{routeInfo.duration}</span><span className="ric-unit">мин</span><span className="ric-label">~Время</span></div>
-                    <div className="ric-item">
-                      <span className="ric-val" style={{color: getRideScore(windDeg, 0).color}}>
-                        {getRideScore(windDeg, 0).emoji}
-                      </span>
-                      <span className="ric-label">Ветер</span>
-                    </div>
                   </div>
                   <div className="ric-places">
                     <span>📍 {routeInfo.from}</span>
